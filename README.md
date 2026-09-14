@@ -74,8 +74,8 @@ GeminiApiComposeStarter/
      ```
 
 3. **Build & Run**:
-   - Open in **Android Studio Jellyfish** or newer.
-   - Run on a physical device or emulator (**Android 8.0+ / API 26+**).
+   - Open in **Android Studio**.
+   - Run on a physical device or emulator.
 
 ---
 
