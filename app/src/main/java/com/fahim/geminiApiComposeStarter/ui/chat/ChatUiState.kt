@@ -10,7 +10,15 @@ data class ChatUiState(
     val errorMessage: String? = null,
     val promptError: PromptError? = null,
     val isDarkMode: Boolean = false,
-    val selectedModel: String = "gemini-3.6-flash"
+    // History drawer
+    val chatSessions: List<ChatSession> = emptyList(),
+    val isHistoryOpen: Boolean = false,
+)
+
+/** Represents a past chat session shown in the history drawer. */
+data class ChatSession(
+    val sessionId: Long,
+    val previewText: String,  // First prompt of the session
 )
 
 enum class PromptError { EMPTY }

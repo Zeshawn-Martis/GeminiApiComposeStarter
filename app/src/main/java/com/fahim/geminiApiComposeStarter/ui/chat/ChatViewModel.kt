@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ChatViewModel(
     private val repository: GeminiRepository,
@@ -22,32 +23,66 @@ class ChatViewModel(
     private val hasApiKey: Boolean
 ) : ViewModel() {
 
+    // Each session is identified by a timestamp. New chat = new sessionId.
+    private var currentSessionId: Long = System.currentTimeMillis()
+
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
+    // Job handles for active collectors so we can cancel & restart on session switch
+    private var sessionJob: kotlinx.coroutines.Job? = null
+
     init {
-        // Collect saved chat history from Room DB
-        viewModelScope.launch(Dispatchers.IO) {
-            chatMessageDao.getAllMessages().collect { dbMessages ->
-                val decryptedMessages = dbMessages.map { entity ->
-                    val decryptedPrompt = KeystoreManager.decrypt(entity.prompt)
-                    entity.copy(prompt = decryptedPrompt)
+        startObservingSession()
+        observeTheme()
+        observeSessionHistory()
+    }
+
+    private fun startObservingSession() {
+        sessionJob?.cancel()
+        sessionJob = viewModelScope.launch(Dispatchers.IO) {
+            chatMessageDao.getMessagesForSession(currentSessionId).collect { dbMessages ->
+                val displayMessages = dbMessages.map { entity ->
+                    val decrypted = runCatching {
+                        KeystoreManager.decrypt(entity.prompt)
+                    }.getOrDefault(entity.prompt)
+                    entity.copy(prompt = decrypted)
                 }
-                _uiState.update { it.copy(messages = decryptedMessages) }
+                _uiState.update { it.copy(messages = displayMessages) }
             }
         }
+    }
 
-        // Collect theme preference from DataStore
+    private fun observeTheme() {
         viewModelScope.launch(Dispatchers.IO) {
-            preferencesRepository.isDarkModeFlow.collect { isDark ->
-                _uiState.update { it.copy(isDarkMode = isDark) }
+            runCatching {
+                preferencesRepository.isDarkModeFlow.collect { isDark ->
+                    _uiState.update { it.copy(isDarkMode = isDark) }
+                }
             }
         }
+    }
 
-        // Collect model preference from DataStore
+    private fun observeSessionHistory() {
         viewModelScope.launch(Dispatchers.IO) {
-            preferencesRepository.selectedModelFlow.collect { model ->
-                _uiState.update { it.copy(selectedModel = model) }
+            chatMessageDao.getAllSessionIds().collect { sessionIds ->
+                val sessions = sessionIds.mapNotNull { sid ->
+                    val first = runCatching {
+                        chatMessageDao.getFirstMessageForSession(sid)
+                    }.getOrNull()
+                    if (first != null) {
+                        val decrypted = runCatching {
+                            KeystoreManager.decrypt(first.prompt)
+                        }.getOrDefault(first.prompt)
+                        ChatSession(
+                            sessionId = sid,
+                            previewText = decrypted.take(60).let {
+                                if (decrypted.length > 60) "$it…" else it
+                            }
+                        )
+                    } else null
+                }
+                _uiState.update { it.copy(chatSessions = sessions) }
             }
         }
     }
@@ -62,22 +97,36 @@ class ChatViewModel(
         }
     }
 
-    fun onSelectModel(modelName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            preferencesRepository.setSelectedModel(modelName)
-        }
-    }
-
     fun onToggleDarkMode() {
         val newMode = !_uiState.value.isDarkMode
         viewModelScope.launch(Dispatchers.IO) {
-            preferencesRepository.setDarkMode(newMode)
+            runCatching { preferencesRepository.setDarkMode(newMode) }
         }
     }
 
+    fun onToggleHistory() {
+        _uiState.update { it.copy(isHistoryOpen = !it.isHistoryOpen) }
+    }
+
+    /** Switch to a past session from history. */
+    fun onOpenSession(sessionId: Long) {
+        currentSessionId = sessionId
+        _uiState.update { it.copy(messages = emptyList(), prompt = "", isHistoryOpen = false) }
+        startObservingSession()
+    }
+
+    /** Start a completely fresh chat with a new sessionId. */
+    fun onNewChat() {
+        currentSessionId = System.currentTimeMillis()
+        _uiState.update { it.copy(messages = emptyList(), prompt = "", errorMessage = null, isHistoryOpen = false) }
+        startObservingSession()
+    }
+
+    /** Delete all messages in the current chat session. */
     fun onClearHistory() {
         viewModelScope.launch(Dispatchers.IO) {
-            chatMessageDao.clearAll()
+            chatMessageDao.clearSession(currentSessionId)
+            // State auto-updates via the flow observer
         }
     }
 
@@ -93,18 +142,21 @@ class ChatViewModel(
         }
         if (_uiState.value.isLoading) return
 
-        val currentModel = _uiState.value.selectedModel
         _uiState.update { it.copy(isLoading = true, errorMessage = null, promptError = null, prompt = "") }
 
         viewModelScope.launch(Dispatchers.IO) {
-            repository.generateText(promptText, currentModel).fold(
+            repository.generateText(promptText).fold(
                 onSuccess = { responseText ->
-                    // Encrypt prompt before persisting to Room database (Android Keystore AES-256-GCM)
-                    val encryptedPrompt = KeystoreManager.encrypt(promptText)
+                    // Encrypt prompt with Android Keystore AES-256-GCM before persisting
+                    val encryptedPrompt = runCatching {
+                        KeystoreManager.encrypt(promptText)
+                    }.getOrDefault(promptText)
+
                     val messageEntity = ChatMessageEntity(
+                        sessionId = currentSessionId,
                         prompt = encryptedPrompt,
                         response = responseText,
-                        modelName = currentModel
+                        modelName = "gemini-3.6-flash"
                     )
                     chatMessageDao.insertMessage(messageEntity)
                     _uiState.update { it.copy(isLoading = false) }
@@ -113,7 +165,7 @@ class ChatViewModel(
                     _uiState.update {
                         it.copy(
                             isLoading = false,
-                            errorMessage = error.message ?: "Something went wrong generating response."
+                            errorMessage = error.message ?: "Something went wrong. Please try again."
                         )
                     }
                 }

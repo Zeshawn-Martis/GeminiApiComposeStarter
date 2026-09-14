@@ -23,9 +23,9 @@ class ChatScreenTest {
                     onPromptChange = {},
                     onSend = {},
                     onVoiceResult = {},
-                    onSelectModel = {},
                     onToggleDarkMode = {},
                     onClearHistory = {},
+                    onNewChat = {},
                     onRetry = {}
                 )
             }

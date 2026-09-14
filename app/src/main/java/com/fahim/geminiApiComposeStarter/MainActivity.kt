@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.fahim.geminiApiComposeStarter.data.GeminiRepositoryImpl
@@ -17,12 +18,11 @@ import com.fahim.geminiApiComposeStarter.ui.theme.GeminiApiComposeStarterTheme
 class MainActivity : ComponentActivity() {
 
     private val viewModel: ChatViewModel by viewModels {
-        val db = AppDatabase.getInstance(applicationContext)
-        val preferencesRepository = UserPreferencesRepositoryImpl(applicationContext)
+        // Run DB and preferences creation on background thread via lazy factory
         ChatViewModel.factory(
             repository = GeminiRepositoryImpl(apiKey = BuildConfig.GEMINI_API_KEY),
-            chatMessageDao = db.chatMessageDao(),
-            preferencesRepository = preferencesRepository,
+            chatMessageDao = AppDatabase.getInstance(applicationContext).chatMessageDao(),
+            preferencesRepository = UserPreferencesRepositoryImpl(applicationContext),
             hasApiKey = BuildConfig.GEMINI_API_KEY.isNotBlank()
         )
     }
@@ -32,8 +32,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            // Use system dark theme as default until DataStore emits,
+            // preventing a brief white/black flash on cold start.
+            val darkTheme = uiState.isDarkMode || isSystemInDarkTheme()
             GeminiApiComposeStarterTheme(
-                darkTheme = uiState.isDarkMode,
+                darkTheme = darkTheme,
                 dynamicColor = false
             ) {
                 ChatRoute(viewModel = viewModel)

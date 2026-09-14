@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
+    val sessionId: Long = 0,
     val prompt: String,
     val response: String,
     val modelName: String = "gemini-3.6-flash",

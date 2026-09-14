@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -21,18 +20,17 @@ import org.junit.Test
 
 class FakeGeminiRepository(var shouldFail: Boolean = false) : GeminiRepository {
     override suspend fun generateText(prompt: String, modelName: String): Result<String> {
-        return if (shouldFail) {
-            Result.failure(RuntimeException("API Error"))
-        } else {
-            Result.success("Echo: $prompt via $modelName")
-        }
+        return if (shouldFail) Result.failure(RuntimeException("API Error"))
+        else Result.success("Echo: $prompt")
     }
 }
 
 class FakeChatMessageDao : ChatMessageDao {
     private val messages = MutableStateFlow<List<ChatMessageEntity>>(emptyList())
 
-    override fun getAllMessages(): Flow<List<ChatMessageEntity>> = messages
+    override fun getMessagesForSession(sessionId: Long): Flow<List<ChatMessageEntity>> = messages
+    override fun getAllSessionIds(): Flow<List<Long>> = MutableStateFlow(emptyList())
+    override suspend fun getFirstMessageForSession(sessionId: Long): ChatMessageEntity? = null
 
     override suspend fun insertMessage(message: ChatMessageEntity): Long {
         val current = messages.value.toMutableList()
@@ -42,25 +40,17 @@ class FakeChatMessageDao : ChatMessageDao {
         return newEntity.id
     }
 
-    override suspend fun clearAll() {
-        messages.value = emptyList()
-    }
+    override suspend fun clearSession(sessionId: Long) { messages.value = emptyList() }
+    override suspend fun clearAll() { messages.value = emptyList() }
 }
 
 class FakeUserPreferencesRepository : UserPreferencesRepository {
     private val _isDarkMode = MutableStateFlow(false)
     private val _selectedModel = MutableStateFlow("gemini-3.6-flash")
-
     override val isDarkModeFlow: Flow<Boolean> = _isDarkMode
     override val selectedModelFlow: Flow<String> = _selectedModel
-
-    override suspend fun setDarkMode(isDarkMode: Boolean) {
-        _isDarkMode.value = isDarkMode
-    }
-
-    override suspend fun setSelectedModel(model: String) {
-        _selectedModel.value = model
-    }
+    override suspend fun setDarkMode(isDarkMode: Boolean) { _isDarkMode.value = isDarkMode }
+    override suspend fun setSelectedModel(model: String) { _selectedModel.value = model }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)

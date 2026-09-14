@@ -8,11 +8,13 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,13 +25,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Refresh
@@ -38,14 +42,16 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -55,26 +61,32 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.fahim.geminiApiComposeStarter.R
 import com.fahim.geminiApiComposeStarter.data.local.ChatMessageEntity
 import com.fahim.geminiApiComposeStarter.ui.text.toBoldAnnotatedString
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun ChatRoute(viewModel: ChatViewModel) {
@@ -84,10 +96,11 @@ fun ChatRoute(viewModel: ChatViewModel) {
         onPromptChange = viewModel::onPromptChange,
         onSend = viewModel::onSend,
         onVoiceResult = viewModel::onVoiceResult,
-        onSelectModel = viewModel::onSelectModel,
         onToggleDarkMode = viewModel::onToggleDarkMode,
         onClearHistory = viewModel::onClearHistory,
-        onRetry = viewModel::onRetry
+        onNewChat = viewModel::onNewChat,
+        onRetry = viewModel::onRetry,
+        onOpenSession = viewModel::onOpenSession,
     )
 }
 
@@ -98,16 +111,18 @@ fun ChatScreen(
     onPromptChange: (String) -> Unit,
     onSend: () -> Unit,
     onVoiceResult: (String) -> Unit,
-    onSelectModel: (String) -> Unit,
     onToggleDarkMode: () -> Unit,
     onClearHistory: () -> Unit,
-    onRetry: (String) -> Unit
+    onNewChat: () -> Unit,
+    onRetry: (String) -> Unit,
+    onOpenSession: (Long) -> Unit,
 ) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
     var showClearDialog by remember { mutableStateOf(false) }
-    var showModelMenu by remember { mutableStateOf(false) }
 
     // Speech-to-text launcher
     val speechLauncher = rememberLauncherForActivityResult(
@@ -121,13 +136,14 @@ fun ChatScreen(
         }
     }
 
-    // Auto scroll to latest message
+    // Auto-scroll to newest message
     LaunchedEffect(state.messages.size) {
         if (state.messages.isNotEmpty()) {
             listState.animateScrollToItem(state.messages.size - 1)
         }
     }
 
+    // Show errors in snackbar
     LaunchedEffect(state.errorMessage) {
         state.errorMessage?.let { snackbarHostState.showSnackbar(it) }
     }
@@ -135,14 +151,14 @@ fun ChatScreen(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            title = { Text("Clear Chat History") },
-            text = { Text("Are you sure you want to delete all saved conversations from local storage?") },
+            title = { Text("Clear Chat") },
+            text = { Text("Delete all messages in this chat?") },
             confirmButton = {
                 TextButton(onClick = {
                     onClearHistory()
                     showClearDialog = false
                 }) {
-                    Text("Clear", color = MaterialTheme.colorScheme.error)
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
@@ -153,148 +169,204 @@ fun ChatScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = stringResource(R.string.app_name),
-                            fontSize = 18.sp,
+                            "Chat History",
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = "Model: ${state.selectedModel}",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
-                },
-                actions = {
-                    // Model Dropdown
-                    Box {
-                        OutlinedButton(
-                            onClick = { showModelMenu = true },
-                            modifier = Modifier.padding(end = 4.dp)
-                        ) {
-                            Text(state.selectedModel, fontSize = 12.sp)
-                        }
-                        DropdownMenu(
-                            expanded = showModelMenu,
-                            onDismissRequest = { showModelMenu = false }
-                        ) {
-                            listOf("gemini-3.6-flash", "gemini-1.5-flash", "gemini-1.5-pro").forEach { model ->
-                                DropdownMenuItem(
-                                    text = { Text(model) },
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (state.chatSessions.isEmpty()) {
+                        Text(
+                            "No past chats yet.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 16.dp)
+                        )
+                    } else {
+                        LazyColumn {
+                            items(state.chatSessions, key = { it.sessionId }) { session ->
+                                val dateStr = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+                                    .format(Date(session.sessionId))
+
+                                NavigationDrawerItem(
+                                    icon = {
+                                        Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null)
+                                    },
+                                    label = {
+                                        Column {
+                                            Text(
+                                                text = session.previewText,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Text(
+                                                text = dateStr,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    selected = false,
                                     onClick = {
-                                        onSelectModel(model)
-                                        showModelMenu = false
+                                        onOpenSession(session.sessionId)
+                                        scope.launch { drawerState.close() }
                                     }
                                 )
                             }
                         }
                     }
-
-                    // Theme Toggle
-                    IconButton(onClick = onToggleDarkMode) {
-                        Icon(
-                            imageVector = if (state.isDarkMode) Icons.Default.WbSunny else Icons.Default.NightlightRound,
-                            contentDescription = "Toggle Theme"
+                }
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                    }
-
-                    // Clear History
-                    IconButton(onClick = { showClearDialog = true }) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Clear History",
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    navigationIcon = {
+                        // Open chat history drawer
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = "Chat History"
+                            )
+                        }
+                    },
+                    actions = {
+                        // New Chat
+                        IconButton(onClick = onNewChat) {
+                            Icon(
+                                imageVector = Icons.Default.AddComment,
+                                contentDescription = "New Chat"
+                            )
+                        }
+                        // Clear current chat
+                        IconButton(
+                            onClick = { showClearDialog = true },
+                            enabled = state.messages.isNotEmpty()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteSweep,
+                                contentDescription = "Clear Chat",
+                                tint = if (state.messages.isNotEmpty())
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        // Dark/Light mode toggle
+                        IconButton(onClick = onToggleDarkMode) {
+                            Icon(
+                                imageVector = if (state.isDarkMode) Icons.Default.WbSunny else Icons.Default.NightlightRound,
+                                contentDescription = "Toggle Theme"
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 )
-            )
-        },
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding(),
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { innerPadding ->
-        Box(
+            },
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                if (state.messages.isEmpty()) {
-                    EmptyChatState(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(
-                            items = state.messages,
-                            key = { it.id }
-                        ) { message ->
-                            ChatMessageItem(
-                                message = message,
-                                context = context,
-                                onRetry = { onRetry(message.prompt) }
-                            )
+                .imePadding(),
+            snackbarHost = { SnackbarHost(snackbarHostState) }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (state.messages.isEmpty() && !state.isLoading) {
+                        EmptyChatState(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(
+                                items = state.messages,
+                                key = { it.id }
+                            ) { message ->
+                                ChatMessageItem(
+                                    message = message,
+                                    context = context,
+                                    onRetry = { onRetry(message.prompt) }
+                                )
+                            }
                         }
                     }
+
+                    PromptBar(
+                        prompt = state.prompt,
+                        promptError = state.promptError,
+                        enabled = !state.isLoading,
+                        onPromptChange = onPromptChange,
+                        onSend = onSend,
+                        onVoiceClick = {
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(
+                                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                                )
+                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt...")
+                            }
+                            try {
+                                speechLauncher.launch(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
                 }
 
-                PromptBar(
-                    prompt = state.prompt,
-                    promptError = state.promptError,
-                    enabled = !state.isLoading,
-                    onPromptChange = onPromptChange,
-                    onSend = onSend,
-                    onVoiceClick = {
-                        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                            putExtra(
-                                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                            )
-                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt to Gemini...")
-                        }
-                        try {
-                            speechLauncher.launch(intent)
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Speech recognition not supported", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                )
-            }
-
-            if (state.isLoading) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Card(
-                            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                                Spacer(modifier = Modifier.width(16.dp))
-                                Text("Gemini is thinking...", fontWeight = FontWeight.Medium)
+                if (state.isLoading) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Card(elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)) {
+                                Row(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Text("Gemini is thinking...", fontWeight = FontWeight.Medium)
+                                }
                             }
                         }
                     }
@@ -306,10 +378,7 @@ fun ChatScreen(
 
 @Composable
 private fun EmptyChatState(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier,
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 imageVector = Icons.Default.AutoAwesome,
@@ -342,7 +411,7 @@ private fun ChatMessageItem(
     val clipboardManager = LocalClipboardManager.current
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // User Message (Right aligned)
+        // User prompt bubble — right-aligned
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
@@ -363,7 +432,7 @@ private fun ChatMessageItem(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Gemini Response (Left aligned)
+        // Gemini response bubble — left-aligned
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Start
@@ -378,39 +447,39 @@ private fun ChatMessageItem(
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = null,
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Gemini (${message.modelName})",
+                            text = "Gemini",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.weight(1f))
-                        // Copy Button
+                        // Copy button
                         IconButton(
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(message.response))
-                                Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
                             },
                             modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Copy Response",
+                                contentDescription = "Copy",
                                 modifier = Modifier.size(16.dp)
                             )
                         }
-                        // Retry Button
+                        // Retry button
                         IconButton(
                             onClick = onRetry,
                             modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
-                                contentDescription = "Retry Prompt",
+                                contentDescription = "Retry",
                                 modifier = Modifier.size(16.dp)
                             )
                         }
