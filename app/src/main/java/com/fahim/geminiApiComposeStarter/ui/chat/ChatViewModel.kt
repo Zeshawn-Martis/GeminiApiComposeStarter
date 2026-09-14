@@ -94,6 +94,7 @@ class ChatViewModel(
     fun onVoiceResult(recognizedText: String) {
         if (recognizedText.isNotBlank()) {
             _uiState.update { it.copy(prompt = recognizedText, promptError = null) }
+            onSend()
         }
     }
 

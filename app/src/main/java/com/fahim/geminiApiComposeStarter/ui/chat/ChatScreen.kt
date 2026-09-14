@@ -5,7 +5,10 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Bundle
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -66,6 +69,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -127,15 +131,115 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     var showClearDialog by remember { mutableStateOf(false) }
 
-    // Speech-to-text launcher
+    var showVoiceDialog by remember { mutableStateOf(false) }
+    var voiceStatusText by remember { mutableStateOf("Listening... Speak now into your microphone.") }
+    var audioLevelDb by remember { mutableStateOf(0f) }
+    var speechRecognizerInstance by remember { mutableStateOf<SpeechRecognizer?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            speechRecognizerInstance?.destroy()
+            speechRecognizerInstance = null
+        }
+    }
+
+    // Speech-to-text activity launcher (fallback)
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val spokenText = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull().orEmpty()
-            onVoiceResult(spokenText)
+                ?.firstOrNull { it.isNotBlank() }
+                .orEmpty()
+            if (spokenText.isNotBlank()) {
+                onVoiceResult(spokenText)
+                showVoiceDialog = false
+            } else {
+                voiceStatusText = "Couldn't catch speech from system recognizer. Tap a sample prompt below or try again."
+            }
+        } else {
+            voiceStatusText = "Speech recognizer returned no text. Tap a sample prompt below or try speaking louder."
+        }
+    }
+
+    fun startListeningInternal() {
+        showVoiceDialog = true
+        voiceStatusText = "Listening... Speak into your microphone now."
+
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            try {
+                speechLauncher.launch(buildSpeechIntent())
+            } catch (e: Exception) {
+                voiceStatusText = "Speech recognition not available on device. Tap a sample prompt below."
+            }
+            return
+        }
+
+        try {
+            speechRecognizerInstance?.destroy()
+            val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            speechRecognizerInstance = recognizer
+
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    voiceStatusText = "Microphone ready! Speak clearly now..."
+                }
+                override fun onBeginningOfSpeech() {
+                    voiceStatusText = "Voice sound detected, capturing speech..."
+                }
+                override fun onRmsChanged(rmsdB: Float) {
+                    audioLevelDb = rmsdB.coerceAtLeast(0f)
+                }
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {
+                    voiceStatusText = "Processing audio input..."
+                }
+                override fun onError(error: Int) {
+                    val msg = when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized. Speak clearly or try system recognizer."
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No sound detected. Speak louder into your mic."
+                        SpeechRecognizer.ERROR_AUDIO -> "Microphone audio error."
+                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network required for speech recognition."
+                        else -> "Speech note ($error). Speak clearly or use system recognizer button below."
+                    }
+                    voiceStatusText = msg
+                }
+                override fun onResults(results: Bundle?) {
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val text = matches?.firstOrNull { it.isNotBlank() }
+                    if (!text.isNullOrEmpty()) {
+                        onVoiceResult(text)
+                        showVoiceDialog = false
+                    } else {
+                        voiceStatusText = "No speech caught. Try speaking again or tap a sample prompt below."
+                    }
+                }
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val text = matches?.firstOrNull { it.isNotBlank() }
+                    if (!text.isNullOrEmpty()) {
+                        onVoiceResult(text)
+                    }
+                }
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toString())
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, java.util.Locale.getDefault().toString())
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                putExtra("android.speech.extra.DICTATION_MODE", true)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 2000L)
+            }
+
+            recognizer.startListening(intent)
+        } catch (e: Exception) {
+            try { speechLauncher.launch(buildSpeechIntent()) } catch (_: Exception) {}
         }
     }
 
@@ -144,14 +248,7 @@ fun ChatScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt...")
-            }
-            try { speechLauncher.launch(intent) }
-            catch (e: Exception) {
-                Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
-            }
+            startListeningInternal()
         } else {
             Toast.makeText(context, "Microphone permission is required for voice input", Toast.LENGTH_LONG).show()
         }
@@ -167,6 +264,114 @@ fun ChatScreen(
     // Show errors in snackbar
     LaunchedEffect(state.errorMessage) {
         state.errorMessage?.let { snackbarHostState.showSnackbar(it) }
+    }
+
+    if (showVoiceDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                try { speechRecognizerInstance?.stopListening() } catch (_: Exception) {}
+                showVoiceDialog = false
+            },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = { Text("Voice Input") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(voiceStatusText, style = MaterialTheme.typography.bodyMedium)
+
+                    // Live mic volume level visualizer
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Text(
+                            "Mic Input:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        repeat(8) { index ->
+                            val active = audioLevelDb > (index * 1.2f)
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(if (active) 16.dp else 6.dp)
+                                    .background(
+                                        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                        shape = RoundedCornerShape(2.dp)
+                                    )
+                            )
+                        }
+                    }
+
+                    if (state.prompt.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                        ) {
+                            Text(
+                                text = "Recognized: \"${state.prompt}\"",
+                                modifier = Modifier.padding(10.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    Text(
+                        "Sample voice prompts (Tap to test on Emulator):",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf("Hello Gemini!", "What is Kotlin?", "Tell me a joke").forEach { sample ->
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.clickable {
+                                    onVoiceResult(sample)
+                                    showVoiceDialog = false
+                                }
+                            ) {
+                                Text(
+                                    text = sample,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    try { speechLauncher.launch(buildSpeechIntent()) } catch (_: Exception) {}
+                }) {
+                    Text("Use System Recognizer")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    try { speechRecognizerInstance?.cancel() } catch (_: Exception) {}
+                    showVoiceDialog = false
+                }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 
     if (showClearDialog) {
@@ -357,20 +562,17 @@ fun ChatScreen(
                         onPromptChange = onPromptChange,
                         onSend = onSend,
                         onVoiceClick = {
+                            showVoiceDialog = true
+                            voiceStatusText = "Listening... Speak into your microphone now."
+
                             val hasPermission = ContextCompat.checkSelfPermission(
                                 context, Manifest.permission.RECORD_AUDIO
                             ) == PackageManager.PERMISSION_GRANTED
 
                             if (hasPermission) {
-                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt...")
-                                }
-                                try { speechLauncher.launch(intent) }
-                                catch (e: Exception) {
-                                    Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
-                                }
+                                startListeningInternal()
                             } else {
+                                voiceStatusText = "Requesting microphone permission..."
                                 audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         }
@@ -558,9 +760,9 @@ private fun PromptBar(
                     )
                 }
             },
-            supportingText = promptError?.let {
+            supportingText = if (promptError != null) {
                 { Text(stringResource(R.string.field_cannot_be_empty)) }
-            }
+            } else null
         )
         FilledIconButton(
             onClick = onSend,
@@ -574,3 +776,18 @@ private fun PromptBar(
         }
     }
 }
+
+private fun buildSpeechIntent(): Intent {
+    return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toString())
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, Locale.getDefault().toString())
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+        putExtra("android.speech.extra.DICTATION_MODE", true)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 2000L)
+        putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak clearly into your microphone...")
+    }
+}
+
