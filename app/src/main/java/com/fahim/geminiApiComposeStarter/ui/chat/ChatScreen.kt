@@ -1,12 +1,15 @@
 package com.fahim.geminiApiComposeStarter.ui.chat
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -133,6 +136,24 @@ fun ChatScreen(
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
                 ?.firstOrNull().orEmpty()
             onVoiceResult(spokenText)
+        }
+    }
+
+    // Runtime permission launcher for RECORD_AUDIO
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt...")
+            }
+            try { speechLauncher.launch(intent) }
+            catch (e: Exception) {
+                Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Microphone permission is required for voice input", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -336,17 +357,21 @@ fun ChatScreen(
                         onPromptChange = onPromptChange,
                         onSend = onSend,
                         onVoiceClick = {
-                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                putExtra(
-                                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                                )
-                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt...")
-                            }
-                            try {
-                                speechLauncher.launch(intent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+                            val hasPermission = ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+
+                            if (hasPermission) {
+                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your prompt...")
+                                }
+                                try { speechLauncher.launch(intent) }
+                                catch (e: Exception) {
+                                    Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         }
                     )

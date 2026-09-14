@@ -124,9 +124,11 @@ class ChatViewModel(
 
     /** Delete all messages in the current chat session. */
     fun onClearHistory() {
+        val sessionToDelete = currentSessionId
+        // Immediately clear the UI — don't wait on the Room Flow re-emission
+        _uiState.update { it.copy(messages = emptyList()) }
         viewModelScope.launch(Dispatchers.IO) {
-            chatMessageDao.clearSession(currentSessionId)
-            // State auto-updates via the flow observer
+            chatMessageDao.clearSession(sessionToDelete)
         }
     }
 
