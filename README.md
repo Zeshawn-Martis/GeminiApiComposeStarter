@@ -1,31 +1,59 @@
 # Gemini API Jetpack Compose Starter (MAD Lab Assignment 1)
 
-Enhanced Android application demonstrating integration with Google Gemini AI (`gemini-3.6-flash`), built using **100% Jetpack Compose (Material 3)**, **Room Database**, **Preferences DataStore**, and **Android Keystore AES-256-GCM Encryption**.
+An Android chat application integrating **Google Gemini AI** (`gemini-3.6-flash`), built with **100% Jetpack Compose (Material 3)**, **Room Database**, **Preferences DataStore**, and **Android Keystore AES-256-GCM Encryption**.
 
 ---
 
 ## 🚀 Key Features
 
-1. **Jetpack Compose Modern UI**:
-   - Material 3 theme with dynamic Light/Dark mode support.
-   - `LazyColumn` conversation view with user and Gemini chat bubbles, auto-scrolling to latest messages.
-   - Copy response to clipboard & prompt retry functionality.
-   - Confirmation dialog for clearing local chat history.
+### 💬 Multi-Session Chat
+- Start a **New Chat** anytime with the ✏️ button — each conversation is its own session.
+- Swipe right (or tap the 🕐 History icon) to open the **Chat History Drawer** and switch between any past conversation.
+- Delete the current chat with the 🗑️ button (with confirmation dialog).
+- All sessions are persisted across app restarts via **Room Database**.
 
-2. **Model Selection**:
-   - Live model selector dropdown allowing dynamic switching between `gemini-3.6-flash`, `gemini-1.5-flash`, and `gemini-1.5-pro`.
+### 🎨 Modern Material 3 UI
+- Dynamic **Light / Dark mode** toggle per user preference.
+- `LazyColumn` conversation view with distinct user and Gemini chat bubbles.
+- Auto-scrolls to the latest message on every response.
+- Copy any response to clipboard with a single tap.
+- Retry any prompt instantly with the Retry button.
 
-3. **Multi-Modal Voice Input**:
-   - Integrated Speech-to-Text input using `RecognizerIntent` and `rememberLauncherForActivityResult`.
+### 🎙️ Voice Input
+- Integrated **Speech-to-Text** using `RecognizerIntent` and `rememberLauncherForActivityResult`.
+- Tap the 🎙️ mic icon in the input bar to speak your prompt.
 
-4. **Persistence & Offline Access**:
-   - **Room Database**: Persists chat history across app restarts.
-   - **Preferences DataStore**: Stores user theme preferences and selected Gemini model.
+### 💾 Persistence
+- **Room Database (v2)**: Stores full chat history partitioned by session ID.
+- **Preferences DataStore**: Persists user theme preference across sessions.
 
-5. **Security & Cryptography (Mandatory)**:
-   - **API Key Security**: Key stored strictly in git-ignored `local.properties` (or CI environment variables) and exposed via `BuildConfig.GEMINI_API_KEY`.
-   - **Android Keystore AES-256-GCM Encryption**: User prompt data is encrypted using Android Keystore cryptographic keys prior to persisting in Room DB storage.
-   - **R8 Code Obfuscation**: `isMinifyEnabled = true` configured for release builds.
+### 🔐 Security & Cryptography
+- **API Key Security**: Stored in git-ignored `local.properties`; exposed at build time only via `BuildConfig.GEMINI_API_KEY`.
+- **Android Keystore AES-256-GCM**: Every user prompt is encrypted before being written to Room DB; decrypted only on read.
+- **R8 Code Obfuscation**: `isMinifyEnabled = true` and `isShrinkResources = true` for release builds.
+
+---
+
+## 📸 App Structure
+
+```
+GeminiApiComposeStarter/
+├── data/
+│   ├── GeminiRepository.kt          # Gemini API abstraction
+│   ├── local/
+│   │   ├── AppDatabase.kt           # Room database (v2)
+│   │   ├── ChatMessageDao.kt        # Session-aware DAO queries
+│   │   └── ChatMessageEntity.kt     # Chat message with sessionId
+│   └── preferences/
+│       └── UserPreferencesRepository.kt  # DataStore theme prefs
+├── security/
+│   └── KeystoreManager.kt           # AES-256-GCM encrypt/decrypt
+└── ui/
+    └── chat/
+        ├── ChatScreen.kt            # Compose UI + History Drawer
+        ├── ChatViewModel.kt         # State + session management
+        └── ChatUiState.kt           # Immutable UI state model
+```
 
 ---
 
@@ -39,42 +67,56 @@ Enhanced Android application demonstrating integration with Google Gemini AI (`g
 
 2. **Configure Gemini API Key**:
    - Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
-   - Open (or create) `local.properties` in the project root directory.
+   - Open (or create) `local.properties` in the project root.
    - Add your key:
      ```properties
      GEMINI_API_KEY=your_actual_gemini_api_key_here
      ```
 
 3. **Build & Run**:
-   - Open the project in Android Studio (Jellyfish or newer recommended).
-   - Build and run on an Android Emulator or physical device (Android 8.0+ / API 26+).
+   - Open in **Android Studio Jellyfish** or newer.
+   - Run on a physical device or emulator (**Android 8.0+ / API 26+**).
 
 ---
 
-## 🔐 Security Architecture & Production Recommendations
+## 🔐 Security Architecture
 
 ### Local Key Protection
-- The API key is loaded dynamically from `local.properties` or environment variables during Gradle build time into `BuildConfig`.
-- Prompts persisted in the local Room database are encrypted at rest using AES-256-GCM via keys generated inside the **Android Keystore System**.
+- The API key is injected at Gradle build time from `local.properties` into `BuildConfig` and never committed to source control.
+- Prompts in the local Room database are encrypted at rest via **AES-256-GCM** keys generated inside the Android Keystore — keys never leave secure hardware.
 
 ### Production Best Practices
-In a production deployment, client-side API keys carry inherent risks. Recommended production safeguards include:
-1. **Backend Proxy Server**: Route Gemini API requests through a secure backend proxy (e.g., Firebase Cloud Functions or Node.js backend) to avoid embedding API keys in the client APK.
-2. **Firebase App Check**: Attest device and app integrity to prevent unauthorized clients from invoking your API.
-3. **API Key Restrictions**: Restrict Google AI Studio keys by HTTP referrers or Android package name and SHA-1 certificate fingerprint.
+In a production deployment, client-side API keys carry inherent risks. Recommended safeguards:
+1. **Backend Proxy Server** — Route Gemini API calls through a secure backend (e.g., Firebase Cloud Functions) so the key never lives in the APK.
+2. **Firebase App Check** — Attest device and app integrity to block unauthorized clients.
+3. **API Key Restrictions** — Restrict keys in Google AI Studio by Android package name and SHA-1 fingerprint.
 
 ---
 
 ## 🧪 Running Tests
 
-### Unit Tests
-Run unit tests for `ChatViewModel`:
+### Unit Tests (ChatViewModel)
 ```bash
 ./gradlew test
 ```
 
-### UI Tests
-Run Compose UI tests on an emulator:
+### UI Tests (Compose — requires emulator/device)
 ```bash
 ./gradlew connectedAndroidTest
 ```
+
+---
+
+## 🛠 Tech Stack
+
+| Layer | Technology |
+|---|---|
+| UI | Jetpack Compose + Material 3 |
+| Architecture | MVVM + StateFlow |
+| AI | Google Gemini API (`gemini-3.6-flash`) |
+| Local DB | Room (v2) |
+| Preferences | Jetpack DataStore |
+| Encryption | Android Keystore AES-256-GCM |
+| Voice | Android SpeechRecognizer |
+| Build | Gradle KTS + KSP |
+| Min SDK | API 26 (Android 8.0) |
